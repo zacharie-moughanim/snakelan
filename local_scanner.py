@@ -1,6 +1,7 @@
 ## Typing
 from typing import Dict, Tuple, List, Any
 device = Tuple[str, List[str], List[str]]
+address = str
 
 ## Imports
 import socket
@@ -32,14 +33,17 @@ def str_net_dev(dev : device) :
 
 ## Main
 
-def get_local_devices() -> list[device] :
+def get_local_devices(prefix : Tuple[int, int] = (192, 168), ranges : Tuple[range, range] = (range(255), range(255))) -> list[device] :
+  """ Scans local IPv4 addresses with [prefix] and suffixes within [ranges] press Ctrl+C while searching to interrupt the search """
   local_devs : list[device] = []
+  n_prefix = len(prefix)
+  assert (n_prefix == 4 - len(ranges))
   try :
-    for i in range(255) :
-      for j in range(255) :
+    for i in ranges[0] :
+      for j in ranges[1] :
         try :
           print(f"\r", sep = "", end = "")
-          dev : device = socket.gethostbyaddr(f"192.168.{i}.{j}")
+          dev : device = socket.gethostbyaddr(f"{prefix[0]}.{prefix[1]}.{i}.{j}")
           print(len(local_devs), "|", str_net_dev(dev))
           local_devs.append(dev)
         except socket.herror :

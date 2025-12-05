@@ -30,7 +30,6 @@ def on_press(key):
     if key == keyboard.Key.enter :
       choice_confirmed = True
       return False
-    # key.char raise [AttributeError] on e.g. enter, thus we test if the key is enter beforehand
     elif key == keyboard.Key.left :
       if 0 < choice :
         choice -= 1
@@ -44,11 +43,11 @@ def on_press(key):
 
 
 def selector(choices : list[Any], str_of_choice = str) -> Any :
+  """ Given a list [choices], makes the user choose an element interactively in the console. Each choice is displayed according to [str_of_choice] """
   global choice, choice_confirmed, n
   n = len(choices)
   choice = 0
   choice_confirmed = False
-  print("Choose :")
   try :
     echooff()
     while not(choice_confirmed) :
