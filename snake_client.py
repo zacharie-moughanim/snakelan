@@ -1,3 +1,4 @@
+from typing import *
 import select
 import sys, os, time
 from socket import socket, gethostbyname
@@ -5,15 +6,32 @@ from pynput import keyboard
 from local_scanner import get_local_devices, device, str_net_dev
 from selector import selector
 
-def select_local_server() -> device :
-  local_devs = get_local_devices()
-  return local_devs[selector(local_devs, lambda dev : str(dev[0]))]
-
 keyboard_directions_arrow = {keyboard.Key.up : "z", keyboard.Key.down : "s", keyboard.Key.left : "q", keyboard.Key.right : "d"}
 
 server = socket()
-addr = select_local_server()[2][0]
-server.connect((addr, 9999))
+connection_established = False
+choice = "s"
+local_devs : List[device] = []
+while not(connection_established) and choice != "q" :
+  try :
+    os.system("clear")
+    if choice == "s" :
+      print("Scanning local network for devices...")
+      local_devs = get_local_devices()
+    print("Who to play with ?")
+    addr = local_devs[selector(local_devs, lambda dev : str(dev[0]))][2][0]
+    server.connect((addr, 9999))
+    connection_established = True
+  except ConnectionRefusedError :
+    input()
+    choice = input("\nConnection refused, try another device, rescan or quit ? (T,s,q)\n")
+    if choice == "" :
+      choice = "t"
+    else :
+      choice = choice.lower()
+
+if not(connection_established) :
+  quit()
 
 msg, a = server.recvfrom(1024)
 os.system("clear")

@@ -5,6 +5,7 @@ address = str
 
 ## Imports
 import socket
+from selector import echooff, echoon
 from pynput import keyboard
 
 ## Pretty printing
@@ -39,6 +40,7 @@ def get_local_devices(prefix : Tuple[int, int] = (192, 168), ranges : Tuple[rang
   n_prefix = len(prefix)
   assert (n_prefix == 4 - len(ranges))
   try :
+    echooff()
     for i in ranges[0] :
       for j in ranges[1] :
         try :
@@ -49,6 +51,9 @@ def get_local_devices(prefix : Tuple[int, int] = (192, 168), ranges : Tuple[rang
         except socket.herror :
           pass
   except KeyboardInterrupt :
+    echoon()
     pass
+  finally :
+    echoon()
   return local_devs
   
