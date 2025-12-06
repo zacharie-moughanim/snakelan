@@ -1,5 +1,6 @@
 from typing import *
 from enum import Enum
+import sys
 
 class Cell(Enum) :
   EMPTY = 0
@@ -106,3 +107,17 @@ def bool_of_input(s : str, default : bool = True) -> bool | None :
       return False
     else :
       return None
+
+def os_generic_clear() -> str :
+  syspm = sys.platform
+  if syspm == 'linux' :
+    return "clear"
+  elif syspm == 'cygwin' :
+    return "clear"  # FIXME not sure this is the clear command
+  elif syspm == 'win32' :
+    return "cls"
+  elif syspm == 'darwin' :
+    return "clear"   # FIXME not sure this is the clear command
+  else :
+    print("Unsupported os, defaulting to \"clear\" to clear console screen, display may be faulty")
+    return "clear"
