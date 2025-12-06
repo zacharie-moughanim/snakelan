@@ -6,10 +6,10 @@ choice = 0
 choice_confirmed = False
 n = 0
 
-def echooff():
-    subprocess.run(['stty', '-echo'], check=True)
+def echooff(): # TODO won't work for non Unix system, find equivalents
+    subprocess.run(['stty', '-echo'], check = True)
 def echoon():
-    subprocess.run(['stty', 'echo'], check=True)
+    subprocess.run(['stty', 'echo'], check = True)
 
 def print_selection(i_choice, choices, str_of_choice) :
   for i, x in enumerate(choices) :
