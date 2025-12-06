@@ -1,42 +1,81 @@
 from typing import *
 from utils import *
 from enum import Enum
-from socket import gethostbyname, socket
+from socket import gethostbyname, gethostbyaddr, socket, MSG_DONTWAIT
 from pynput import keyboard
 from selector import selector, echoon, echooff
+import _thread
+from threading import *
 import time, os, random
 
 ## Types
 
 snake_board = list[list[tuple[Cell, int | None]]]
 
-## Game parameters
-width = 11
-height = 11
-n_snakes = 2
-initial_snake_length = 3
-initial_snakes = [((int(height/2), int(width/4)), Dir.EAST), ((int(height/2), int(3 * width/4)), Dir.WEST)]
-emoji_mode = True
-keyboard_directions = ({'z' : Dir.NORTH, 'q' : Dir.WEST, 's' : Dir.SOUTH, 'd' : Dir.EAST}, {'o' : Dir.NORTH, 'k' : Dir.WEST, 'l' : Dir.SOUTH, 'm' : Dir.EAST})
-keyboard_directions_arrow = {keyboard.Key.up : Dir.NORTH, keyboard.Key.down : Dir.SOUTH, keyboard.Key.left : Dir.WEST, keyboard.Key.right : Dir.EAST}
-online = True
+## Keyboard monitoring
 
-## Classes
+keyboard_directions = ({'z' : Dir.NORTH, 'q' : Dir.WEST, 's' : Dir.SOUTH, 'd' : Dir.EAST}, {'o' : Dir.NORTH, 'k' : Dir.WEST, 'l' : Dir.SOUTH, 'm' : Dir.EAST}) # separate dictionaries for zqsd and oklm keys, they are separate for local games
+keyboard_directions_all = {
+    keyboard.Key.up : Dir.NORTH, keyboard.Key.down : Dir.SOUTH, keyboard.Key.left : Dir.WEST, keyboard.Key.right : Dir.EAST,
+    "z" : Dir.NORTH, "q" : Dir.WEST, "s" : Dir.SOUTH, "d" : Dir.EAST,
+    "o" : Dir.NORTH, "k" : Dir.WEST, "l" : Dir.SOUTH, "m" : Dir.EAST
+  } # concatenated dictionaries for zqsd, oklm and ↑←↓→ keys
+
 
 def nothing(key) :
   pass
 
-def update_local(key) :
-  global game
-  try :
-    if key.char in keyboard_directions[0] :
-      game.snakes[0].change_direction(keyboard_directions[0][key.char])
-    elif key.char in keyboard_directions[1] :
-      game.snakes[1].change_direction(keyboard_directions[1][key.char])
-  except AttributeError :
-    pass
+def update_local(game, key) :
+  global direction_change_allowed
+  if direction_change_allowed :
+    try :
+      if key.char in keyboard_directions[0] :
+        game.snakes[0].change_direction(keyboard_directions[0][key.char])
+      elif key.char in keyboard_directions[1] :
+        game.snakes[1].change_direction(keyboard_directions[1][key.char])
+    except AttributeError :
+      pass
 
-class Snake :
+def just_print(key) :
+  global direction_change_allowed
+  if direction_change_allowed :
+    print("pressed : ", key)
+
+def listening_moves(game : "Game", sclient : socket, lock : Lock) :
+  """ listen moves from [sclient] while [lock] is acquired and performs the updates in the second snake's direction in [game] """
+  while lock.locked() : # while the main thread acquired the lock, we listen for move command from the client
+    try :
+      msg = sclient.recv(1, MSG_DONTWAIT)
+      distant_move = msg.decode()
+      if distant_move in keyboard_directions_all.keys() :
+        print("Received command :", distant_move, "from distant adversary")
+        # print(distant_move)
+        game.snakes[1].change_direction(keyboard_directions_all[distant_move])
+      else :
+        print("Received unrecognized move :", distant_move, "from distant adversary")
+    except BlockingIOError :
+      pass
+
+## Displaying
+
+## Display parameters
+
+clear_cmd = os_generic_clear()
+
+direction_change_allowed = False # needs to be a global because used in [update_local], called on key events and modified via an instance of Game FIXME test to pass a mutable parameter instead
+
+## Network auxiliaries
+
+def tcp_send_with_length(sckt : socket, msg : bytes, size : int = 4, endianness : str = 'big') :
+  """ sends [msg] on TCP socket [sckt], prepended by its length in bytes, the length is encoded on [size] bytes """
+  n = len(msg)
+  assert (n < 2**32) # to send the length on 4 bytes this must be verified, although we have other problems if we try to send 4 GB over the network for a game of snake
+  sckt.send(n.to_bytes(4, endianness)) # TODO check canonical endianness for network communications
+  sckt.send(msg)
+
+## Classes
+
+class Snake : # FIXME : when pressing quickly z then d (or a rotation of the same thing), loses automatically + some issues with the displaying of the snake when passing through themselve
   id : int
   x_hd : int
   y_hd : int
@@ -74,13 +113,8 @@ class Snake :
     return f"id : {self.id}, head at : ({self.x_hd}, {self.y_hd}), tail at : ({self.x_tl}, {self.y_tl}), dirs : {self.dirs}, dir : {self.dir}, length : {len(self.dirs)}"
 
   def change_direction(self, dir : Dir) -> str :
-    errmsg = ""
-    if is_opposite_direction(self.dir, dir) :
-      errmsg = f"{self.id} : Cannot change to opposite direction"
-      print(errmsg)
-    else :
+    if not(is_opposite_direction(self.dir, dir)) :
       self.dir = dir
-    return errmsg
 
   def move_head(self) -> None :
     """ moves the head to the next position, given the direction """
@@ -96,7 +130,6 @@ class Snake :
     self.x_tl = new_x_tl
     self.y_tl = new_y_tl
     self.dirs.pop(0)
-    
 
   def move(self, grid : snake_board, other_snakes : list['Snake']) -> tuple[list[int], bool] :
     """ Moves the snake to the next cell, according to the direction.
@@ -177,24 +210,27 @@ class Game :
   grid : snake_board # each cell, if it's a snake, contains the id of the snake as well, otherwise, the additional information is None
   width : int
   height : int
-  snakes : list[Snake] # snake[i].id is always equal to i
+  snakes : List[Snake] # snake[i].id is always equal to i
   snake_colors : tuple[str, str, str, str, str]
   state : State
-  loser : int
+  losers : List[int]
   timeout : float
-  def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1.) :
+  emoji_mode : bool
+  def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1., emoji_mode : bool = True) :
     """ initiates a game.
       [width] [height] : dimension of the board
       [initial_snakes] : a list of initial coordinates of the heads and directions of the snakes. We assume snakes don't overlap at the beginning and provides valid coordinates;
      """
-    assert (n_snakes < 5) # for now, only a maximum of 5 snakes is allowed
+    n_snakes = len(initial_snakes)
+    assert (n_snakes < 5) # for now, only a maximum of 5 snakes is allowed (because of the colors)
     self.width = width
     self.height = height
     self.state = State.NOT_STARTED
-    self.loser = -1
+    self.losers = []
     self.timeout = timeout
     self.n_snakes = n_snakes
-    if emoji_mode :
+    self.emoji_mode = emoji_mode
+    if self.emoji_mode :
       self.snake_color = ("⬜", "🟩", "🟥", "🟧", "🟦")
     else :
       self.snake_color = ("#", "%", "$", "€", "&")
@@ -211,7 +247,7 @@ class Game :
     first_line = "┌"             # first and last line for a frame of the form : 
     last_line = "└"              # ┌──────────────────┐
     for i in range(self.width) : # │                  │
-      if emoji_mode :            # │                  │
+      if self.emoji_mode :       # │                  │
         first_line += "─"        # │                  │
         last_line += "─"         # │                  │
       first_line += "─"          # │                  │
@@ -227,19 +263,19 @@ class Game :
         type_cell, id = self.grid[i][j]
         match type_cell :
           case Cell.EMPTY :
-            if emoji_mode :
+            if self.emoji_mode :
               line += "  "
             else :
               line += " "
           case Cell.APPLE :
-            if emoji_mode :
+            if self.emoji_mode :
               line += "🍎"
             else :
               line += "O"
           case Cell.SNAKE :
             line += self.snake_color[id]
           case Cell.WALL :
-            if emoji_mode :
+            if self.emoji_mode :
               line += "🧱"
             else :
               line += "▆"
@@ -247,7 +283,10 @@ class Game :
     res += last_line
     return res
   def update_directions(self) -> None :
+    global direction_change_allowed
+    direction_change_allowed = True
     time.sleep(self.timeout)
+    direction_change_allowed = False
 
   def play_round(self) -> bool :
     """ plays a round, returns True if the game can be continued, False if it is finished """
@@ -272,68 +311,49 @@ class Game :
       snake.end_of_round()
     if losers != [] :
       print(join(losers, ", ", " and "), " lost")
+      self.losers = losers
     return losers == []
   def start(self, display : bool = True, clear : bool = True) -> None :
-    os.system("clear")
+    os.system(clear_cmd)
     print(self)
-    listener = keyboard.Listener(on_press = update_local, on_release = nothing)
+    listener = keyboard.Listener(on_press = lambda k : update_local(self, k), on_release = nothing)
     listener.start()
     while self.play_round() :
       if display :
-        os.system("clear")
+        os.system(clear_cmd)
         print(self)
     listener.stop()
 
-class onlineGame(Game) :
+class OnlineGame(Game) :
   sclient : socket
+  def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1.) :
+    """ Initiates an online game. For now, allow only two players. See [Game] for more information. """
+    n_snakes = len(initial_snakes)
+    if n_snakes != 2 :
+      raise ValueError("For now, an online game can only be between two players.")
+    super().__init__(width, height, initial_snake_length, initial_snakes, timeout)
   def update_directions(self) -> None :
-    global snake_to_move
-    if online :
-      assert len(self.snakes) == 2, "For now, we only allow 2 snakes for an online game."
-      # Change direction for player 0 (local)
-      print(f"Waiting for your move (up/down/left/right)...")
-      with keyboard.Events() as events:
-        event = events.get(float(self.timeout))
-        if event is None:
-            print('You did not press a key within one second')
-        else:
-          print(f"you pressed {event}")
-          if event.key in keyboard_directions_arrow :
-            if event.key in keyboard_directions_arrow :
-              print(event.key, keyboard_directions_arrow[event.key])
-              self.snakes[0].change_direction(keyboard_directions_arrow[event.key])
-            else :
-              print("New direction must be up, down, left or right")
-          else :
-            print("New direction must be up, down, left or right")
-      print("The end !")
-      # Change direction for player 1 (distant)
-      print("waiting for adversary's move")
-      self.sclient.send("Waiting for your move (z/s/q/d)...".encode())
-      adv_move = self.sclient.recv(4) # waits for the adversary's move
-      adv_cmd = adv_move.decode()
-      if adv_cmd != "n" :
-        if adv_cmd in keyboard_directions :
-          errmsg = self.snakes[1].change_direction(keyboard_directions[adv_cmd])
-          if errmsg != "" :
-            self.sclient.send(errmsg.encode())
-        else :
-          self.sclient.send("New direction must be z, q, s or d".encode())
-    else :
-      for (i_snake, snake) in enumerate(self.snakes) :
-        print(f"Change directions of {i_snake} ?")
-        i, o, e = select.select( [sys.stdin], [], [], self.timeout)
-        if i :
-          cmd = sys.stdin.readline().strip()
-          if cmd in keyboard_directions :
-            print(cmd, keyboard_directions[cmd])
-            snake.change_direction(keyboard_directions[cmd])
-          else :
-            print("Invalid direction")
+    global direction_change_allowed
+    print("sending start moves")
+    self.sclient.send("start moves".encode()) # nb of bytes : 11
+    print("start moves was received by client")
+    end_listening_lock = _thread.allocate_lock()
+    listening_distant = Thread(target = listening_moves, args = (self, self.sclient, end_listening_lock))
+    end_listening_lock.acquire() # must not be blocking
+    listening_distant.start()
+    direction_change_allowed = True
+    time.sleep(self.timeout)
+    end_listening_lock.release()
+    # thread must have finished now, due to the release of th elock
+    print("sending end moves")
+    self.sclient.send("end moves".encode()) # nb of bytes : 9
+    time.sleep(.1) # FIXME dirty
+    print("end moves was received by client")
+    direction_change_allowed = False
   def play_round(self) -> bool :
     """ plays a round, returns True if the game can be continued, False if it is finished """
     self.update_directions()
-    # At the beginning, all [already_played] must be [False].
+    # Moving snakes. (at the beginning, all [already_played] must be [False])
     losers = []
     apple_ate = False
     for snake in self.snakes :
@@ -348,59 +368,73 @@ class onlineGame(Game) :
         x_rd = random.randrange(self.height)
         y_rd = random.randrange(self.width)
       self.grid[x_rd][y_rd] = (Cell.APPLE, None)
-    # Ends the round, reset the snake's already_played booleans for a new round, prints the losers if there was some. 
+    # Ends the round, reset the snake's [already_played] booleans for a new round, prints the losers if there was some. 
     for snake in self.snakes :
       snake.end_of_round()
     if losers != [] :
-      losers_pp = (join(losers, ", ", " and ") + " lost")
-      print(losers_pp)
-      self.sclient.send((losers_pp+"\n").encode())
-      time.sleep(5) # Demander à yaëlle comment faire ça de manière moins dégueulasse
-    self.sclient.send("round over\n".encode())
+      print(join(losers, ", ", " and "), "lost")
+      self.losers = losers
     return losers == []
   def start(self, display : bool = True, clear : bool = True) -> None :
-    if online :
-      server : socket = socket()
-      server.bind(('0.0.0.0', 9999))
-      server.listen()
-
-      (self.sclient, adclient) = server.accept() # Attend qu'un adversaire se connecte
-      print("@: ", adclient)
-      self.sclient.send((str(self)+"\n").encode())
-      time.sleep(1)
-      self.sclient.send(self.timeout.to_bytes())
-      print(f"Timeout : {self.timeout}")
-    os.system('clear')
-    print(game)
-    while True :
-      is_end = not(self.play_round())
+    os.system(clear_cmd)
+    # Waiting for an adversary
+    adversary_found : bool | None = False
+    server = socket()
+    print("Waiting for an adversary to connect...")
+    server.bind(('0.0.0.0', 9999))
+    server.listen()
+    while not(adversary_found) :
+      (sclient, adclient) = server.accept()
+      adversary_found = None
+      while adversary_found is None :
+        print(gethostbyaddr(adclient[0]), end = " ")
+        adversary_found = bool_of_input(input("wants to play, start a game with them ? (Y/n) "))
+      # Adversary found, trying to engage a game
+      try :
+        print("sending game start ?")
+        sclient.send("game start ?".encode()) # nb of bytes : 12
+        print("game start ? received by client, now waiting for game startOK confirmation")
+        donnees = sclient.recv(12)
+        print(donnees.decode())
+        time.sleep(2)
+        if donnees.decode() == "game startOK" :
+          self.sclient = sclient
+        else :
+          print("Did not respond to the game invitiation")
+          adversary_found = False
+      except ConnectionResetError :
+        print("This one is not worth it, they just left ! How rude !")
+        adversary_found = False
+    print("Connection established, game starting", end = "")
+    for i in range(3) :
+      time.sleep(.2)
+      print(".", end = "", flush = True)
+    os.system(clear_cmd)
+    # Playing a game
+    print(self)
+    print("sending self for the first time : ")
+    tcp_send_with_length(self.sclient, str(self).encode())
+    print("(first ever) self received by client")
+    listener = keyboard.Listener(on_press = lambda k : update_local(self, k), on_release = nothing) # keyboard.Listener(on_press = update_local, on_release = nothing)
+    listener.start()
+    while self.play_round() :
       if display :
-        os.system("clear")
+        print("sending self : ")
         print(self)
-        if online :
-          self.sclient.send((str(self)+"\n").encode())
-      if is_end :
-        time.sleep(1)
-        self.sclient.send("\ngame over\n".encode())
-        break
-    if online :
-      print("Closing connection...")
-      self.sclient.close()
-
-## Running a game :
-
-continue_game = True
-
-while continue_game :
-  timeout = [1., .5, .1][selector([0, 1, 2], lambda i : ["🐢", "🐍", "🐰"][i])]
-  game = Game(width, height, initial_snake_length, initial_snakes[:1], timeout)
-  try :
-    echooff()
-    game.start()
-  finally :
-    echoon()
-  in_cont = "x"
-  while in_cont not in ["y", "n", ""] :
-    in_cont = input("\rContinue ? (Y/n)")
-    if in_cont == "n":
-      continue_game = False
+        tcp_send_with_length(self.sclient, str(self).encode()) 
+        print("self received by client")
+        # os.system(clear_cmd)
+    listener.stop()
+    print("sending self : ")
+    print(self)
+    tcp_send_with_length(self.sclient, str(self).encode()) 
+    print("self received by client")
+    print("Sending Game over...")
+    self.sclient.send("Game over..".encode()) # nb of bytes : 11 /!\ must be the same number of bytes as moves start (11)
+    print("client received Game over, now sending losers...")
+    time.sleep(.1) # Game over is sometimes concatenated with next message "start moves", dirty fix to prevent that
+    tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode())
+    print("client received losers")
+  def end(self) -> None :
+    """ Ends the game : close connection with distant adversary """
+    self.sclient.close()
