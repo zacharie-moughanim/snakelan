@@ -1,6 +1,7 @@
 from typing import *
 from enum import Enum
 import sys
+import socket
 
 class Cell(Enum) :
   EMPTY = 0
@@ -121,3 +122,17 @@ def os_generic_clear() -> str :
   else :
     print("Unsupported os, defaulting to \"clear\" to clear console screen, display may be faulty")
     return "clear"
+
+## Network auxiliaries
+
+def tcp_recv_with_length(sckt : socket, size : int = 4, endianness : str = 'big') :
+  """ receives a message on TCP socket [sckt], prepended by its length in bytes, the length is supposed to be encoded on [size] bytes according to the [endiannes] """
+  n = int.from_bytes(sckt.recv(4), endianness)
+  return sckt.recv(n)
+
+def tcp_send_with_length(sckt : socket, msg : bytes, size : int = 4, endianness : str = 'big') :
+  """ sends [msg] on TCP socket [sckt], prepended by its length in bytes, the length is encoded on [size] bytes """
+  n = len(msg)
+  assert (n < 2**32) # to send the length on 4 bytes this must be verified, although we have other problems if we try to send 4 GB over the network for a game of snake
+  sckt.send(n.to_bytes(4, endianness)) # TODO check canonical endianness for network communications
+  sckt.send(msg)

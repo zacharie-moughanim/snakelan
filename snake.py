@@ -36,11 +36,6 @@ def update_local(game, key) :
     except AttributeError :
       pass
 
-def just_print(key) :
-  global direction_change_allowed
-  if direction_change_allowed :
-    print("pressed : ", key)
-
 def listening_moves(game : "Game", sclient : socket, lock : Lock) :
   """ listen moves from [sclient] while [lock] is acquired and performs the updates in the second snake's direction in [game] """
   while lock.locked() : # while the main thread acquired the lock, we listen for move command from the client
@@ -48,32 +43,25 @@ def listening_moves(game : "Game", sclient : socket, lock : Lock) :
       msg = sclient.recv(1, MSG_DONTWAIT)
       distant_move = msg.decode()
       if distant_move in keyboard_directions_all.keys() :
-        print("Received command :", distant_move, "from distant adversary")
+        if debug :
+          print("Received command :", distant_move, "from distant adversary")
         # print(distant_move)
         game.snakes[1].change_direction(keyboard_directions_all[distant_move])
       else :
-        print("Received unrecognized move :", distant_move, "from distant adversary")
+        if debug :
+          print("Received unrecognized move :", distant_move, "from distant adversary")
     except BlockingIOError :
       pass
-
-## Displaying
-
+  
 ## Display parameters
 
 clear_cmd = os_generic_clear()
 
 direction_change_allowed = False # needs to be a global because used in [update_local], called on key events and modified via an instance of Game FIXME test to pass a mutable parameter instead
 
-## Network auxiliaries
-
-def tcp_send_with_length(sckt : socket, msg : bytes, size : int = 4, endianness : str = 'big') :
-  """ sends [msg] on TCP socket [sckt], prepended by its length in bytes, the length is encoded on [size] bytes """
-  n = len(msg)
-  assert (n < 2**32) # to send the length on 4 bytes this must be verified, although we have other problems if we try to send 4 GB over the network for a game of snake
-  sckt.send(n.to_bytes(4, endianness)) # TODO check canonical endianness for network communications
-  sckt.send(msg)
-
 ## Classes
+
+debug = False
 
 class Snake : # FIXME : when pressing quickly z then d (or a rotation of the same thing), loses automatically + some issues with the displaying of the snake when passing through themselve
   id : int
@@ -126,7 +114,9 @@ class Snake : # FIXME : when pressing quickly z then d (or a rotation of the sam
   def move_tail(self, grid : snake_board) -> None :
     """ moves the tail to the next position and make the previous position of the tail empty, given the direction """
     new_x_tl, new_y_tl = next_coordinates(self.x_tl, self.y_tl, self.dirs[0])
-    grid[self.x_tl][self.y_tl] = (Cell.EMPTY, None)
+    type_cell, id_snake = grid[self.x_tl][self.y_tl]
+    if type_cell == Cell.SNAKE and id_snake == self.id :
+      grid[self.x_tl][self.y_tl] = (Cell.EMPTY, None)
     self.x_tl = new_x_tl
     self.y_tl = new_y_tl
     self.dirs.pop(0)
@@ -206,12 +196,12 @@ class Snake : # FIXME : when pressing quickly z then d (or a rotation of the sam
   def end_of_round(self) :
     self.already_played = False
 
-class Game :
+class Game : # FIXME still buggy, it appears we can just go back (pressing q when we're going from left to right) without losing, and cf fixme of Snake class
   grid : snake_board # each cell, if it's a snake, contains the id of the snake as well, otherwise, the additional information is None
   width : int
   height : int
   snakes : List[Snake] # snake[i].id is always equal to i
-  snake_colors : tuple[str, str, str, str, str]
+  snake_colors : tuple[str, str, str, str, str] # The symbol with which we print the snake
   state : State
   losers : List[int]
   timeout : float
@@ -334,9 +324,11 @@ class OnlineGame(Game) :
     super().__init__(width, height, initial_snake_length, initial_snakes, timeout)
   def update_directions(self) -> None :
     global direction_change_allowed
-    print("sending start moves")
+    if debug :
+      print("sending start moves")
     self.sclient.send("start moves".encode()) # nb of bytes : 11
-    print("start moves was received by client")
+    if debug :
+      print("start moves was received by client")
     end_listening_lock = _thread.allocate_lock()
     listening_distant = Thread(target = listening_moves, args = (self, self.sclient, end_listening_lock))
     end_listening_lock.acquire() # must not be blocking
@@ -345,10 +337,11 @@ class OnlineGame(Game) :
     time.sleep(self.timeout)
     end_listening_lock.release()
     # thread must have finished now, due to the release of th elock
-    print("sending end moves")
+    if debug :
+      print("sending end moves")
     self.sclient.send("end moves".encode()) # nb of bytes : 9
-    time.sleep(.1) # FIXME dirty
-    print("end moves was received by client")
+    if debug :
+      print("end moves was received by client")
     direction_change_allowed = False
   def play_round(self) -> bool :
     """ plays a round, returns True if the game can be continued, False if it is finished """
@@ -387,16 +380,19 @@ class OnlineGame(Game) :
       (sclient, adclient) = server.accept()
       adversary_found = None
       while adversary_found is None :
-        print(gethostbyaddr(adclient[0]), end = " ")
+        print(gethostbyaddr(adclient[0])[0], end = " ")
         adversary_found = bool_of_input(input("wants to play, start a game with them ? (Y/n) "))
       # Adversary found, trying to engage a game
       try :
-        print("sending game start ?")
+        if debug :
+          print("sending game start ?")
         sclient.send("game start ?".encode()) # nb of bytes : 12
-        print("game start ? received by client, now waiting for game startOK confirmation")
+        if debug :
+          print("game start ? received by client, now waiting for game startOK confirmation")
         donnees = sclient.recv(12)
-        print(donnees.decode())
-        time.sleep(2)
+        if debug :
+          print(donnees.decode())
+          time.sleep(2)
         if donnees.decode() == "game startOK" :
           self.sclient = sclient
         else :
@@ -407,34 +403,45 @@ class OnlineGame(Game) :
         adversary_found = False
     print("Connection established, game starting", end = "")
     for i in range(3) :
-      time.sleep(.2)
+      time.sleep(.3)
       print(".", end = "", flush = True)
     os.system(clear_cmd)
     # Playing a game
     print(self)
-    print("sending self for the first time : ")
+    if debug :
+      print("sending self for the first time : ")
     tcp_send_with_length(self.sclient, str(self).encode())
-    print("(first ever) self received by client")
+    if debug :
+      print("(first ever) self received by client")
     listener = keyboard.Listener(on_press = lambda k : update_local(self, k), on_release = nothing) # keyboard.Listener(on_press = update_local, on_release = nothing)
     listener.start()
     while self.play_round() :
+      if not(debug) :
+        os.system(clear_cmd)
       if display :
-        print("sending self : ")
+        if debug :
+          print("sending self : ")
         print(self)
         tcp_send_with_length(self.sclient, str(self).encode()) 
-        print("self received by client")
-        # os.system(clear_cmd)
+        if debug :
+          print("self received by client")
     listener.stop()
-    print("sending self : ")
-    print(self)
+    if debug :
+      print("sending self for the last time : ")
     tcp_send_with_length(self.sclient, str(self).encode()) 
-    print("self received by client")
-    print("Sending Game over...")
+    if debug :
+      print("self received by client (for the last time)")
+    if debug :
+      print("Sending Game over...")
     self.sclient.send("Game over..".encode()) # nb of bytes : 11 /!\ must be the same number of bytes as moves start (11)
-    print("client received Game over, now sending losers...")
-    time.sleep(.1) # Game over is sometimes concatenated with next message "start moves", dirty fix to prevent that
-    tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode())
-    print("client received losers")
+    if debug :
+      print("client received Game over, now sending losers...")
+    tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode()) # TODO replace this by a while loop, ending by a character indicating the end of losers
+    if debug :
+      print("client received losers")
   def end(self) -> None :
     """ Ends the game : close connection with distant adversary """
     self.sclient.close()
+  def send_to_adversary(self, data : bytes) :
+   """ Assumes [self.sclient] is an open socket, sends [msg] to the current adversary. """
+   self.sclient.send(data)

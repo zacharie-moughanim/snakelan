@@ -5,7 +5,9 @@ from socket import socket, gethostbyname
 from pynput import keyboard
 from local_scanner import get_local_devices, device, str_net_dev
 from selector import selector, echoon, echooff
-from utils import os_generic_clear
+from utils import os_generic_clear, tcp_recv_with_length
+
+debug = False
 
 ## Keyboard monitoring
 
@@ -19,30 +21,16 @@ clear_cmd = os_generic_clear()
 def nothing(key) :
   pass
 
-def send_keyboard_input(key) : # server : socket, 
-  global direction_change_allowed, server
+def send_keyboard_input(server : socket, key) : # TODO re-add this argument : server : socket, instead of a global 
+  global direction_change_allowed
   try :
     if direction_change_allowed :
-      print(f"{key}, {str(key.char)} received !")
+      if debug :
+        print(f"{key}, {str(key.char)} received !")
       if key.char in accepted_direction_inputs :
         server.send(str(key.char).encode())
-      # if key.char == 'o' :
-      #   server.send("o".encode())
-      # elif key.char == 'k' :
-      #   server.send("k".encode())
-      # elif key.char == 'l' :
-      #   server.send("l".encode())
-      # elif key.char == 'm' :
-      #   server.send("m".encode())
   except AttributeError :
     pass
-
-## Network auxiliaries
-
-def tcp_recv_with_length(sckt : socket, size : int = 4, endianness : str = 'big') :
-  """ receives a message on TCP socket [sckt], prepended by its length in bytes, the length is supposed to be encoded on [size] bytes according to the [endiannes] """
-  n = int.from_bytes(sckt.recv(4), endianness)
-  return sckt.recv(n)
 
 ## Establishing connection with a game server
 
@@ -88,43 +76,47 @@ if not(connection_established) :
 print("Connection established with a snake_lan game server")
 
 ## Playing game
-
+os.system(clear_cmd)
 print(tcp_recv_with_length(server).decode()) # printing the initial board
 
 try :
   echooff()
-  listener = keyboard.Listener(on_press = send_keyboard_input, on_release = nothing)
+  listener = keyboard.Listener(on_press = lambda k : send_keyboard_input(server, k), on_release = nothing)
   listener.start() # Start listening for keyboard inputs
   while True :
-    print("\nwaiting for the signal for a move, or \"\game over\"...")
+    if debug :
+      print("\nwaiting for the signal for a move, or \"\game over\"...")
     msg = server.recv(11) # waiting for signal to choose a direction or game over signal
     if msg.decode() == "Game over.." :
-      print("Game over received :", msg.decode())
+      if debug :
+        print("Game over received :", msg.decode())
       break
 
     if msg.decode() == "start moves" :
-      print("START MOVES RECEIVED")
+      if debug :
+        print("RECEIVED START MOVES")
       direction_change_allowed = True
     else :
-      print(f"Error : unexpected message \"{msg.decode()}\"")
+      print(f"Error : unexpected message \"{msg.decode()}\", expected \"start moves\"")
       quit()
-
-    print("WAITING FOR END_MOVES")
+    if debug :
+      print("WAITING FOR END_MOVES")
     msg = server.recv(9)
-    print(msg)
+    if debug :
+      print(msg)
     if msg.decode() != "end moves" :
-      print("Receive something different than \"end moves\" when expected :", msg.decode())
+      print(f"Error : unexpected message \"{msg.decode()}\", expected \"end moves\"")
       quit()
-    print("RECEIVED END_MOVES")
+    if debug :
+      print("RECEIVED END_MOVES")
     direction_change_allowed = False
-    print("\n WAITING FOR THE BOARD : \n")
-    # os.system(clear_cmd)
+    if debug :
+      print("\n WAITING FOR THE BOARD : \n")
+    os.system(clear_cmd)
     print(tcp_recv_with_length(server).decode()) # printing the actualized board
-    print("\n END BOARD : \n")
+    if debug :
+      print("\n RECEIVED BOARD : \n")
   listener.stop() # Stop listening for keyboard inputs
-except UnicodeDecodeError :
-  print("UnicodeDecodeError detected")
-  quit()
 finally :
   echoon()
 
