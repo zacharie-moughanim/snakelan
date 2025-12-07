@@ -96,7 +96,7 @@ def join(t : list[Any], sep : str, last_sep : str | None = None) -> str :
       res += (sep + str(x))
   return res
 
-def bool_of_input(s : str, default : bool = True) -> bool | None :
+def bool_of_input(s : str, default : bool | None = True) -> bool | None :
   """ For an input choice of the form (y/n), (Y/n) or (y/N), returns the associated boolean, with the [default] value in case of empty input """
   if s == "" :
     return default

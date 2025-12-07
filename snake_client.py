@@ -1,11 +1,11 @@
 from typing import *
-import select
 import sys, os, time
 from socket import socket, gethostbyname
 from pynput import keyboard
 from local_scanner import get_local_devices, device, str_net_dev
 from selector import selector, echoon, echooff
-from utils import os_generic_clear, tcp_recv_with_length
+from threading import *
+from utils import os_generic_clear, tcp_recv_with_length, bool_of_input
 
 debug = False
 
@@ -16,6 +16,7 @@ keyboard_directions_arrow = {keyboard.Key.up : "o", keyboard.Key.down : "l", key
 direction_change_allowed = False
 
 ## Display parameters
+
 clear_cmd = os_generic_clear()
 
 def nothing(key) :
@@ -31,6 +32,12 @@ def send_keyboard_input(server : socket, key) : # TODO re-add this argument : se
         server.send(str(key.char).encode())
   except AttributeError :
     pass
+
+## Network auxiliaries
+
+def action_on_recv(sckt : socket, n : int, on_recv) -> bytes :
+  """ Tries to receive [n] bytes from [sckt]. If and when received, calls [on_recv] with the data received as argument. Useful with threading. """
+  on_recv(sckt.recv(n))
 
 ## Establishing connection with a game server
 
@@ -62,12 +69,8 @@ while not(connection_established) and choice != "q" :
   if errmsg != "" :
     server.detach()
     connection_established = False
-    input()
-    choice = input(f"\n{errmsg}, try another device, rescan or quit ? (T,s,q)\n")
-    if choice == "" :
-      choice = "t"
-    else :
-      choice = choice.lower()
+    choice = input(f"\n{errmsg}, try another device, rescan or quit ? (t,s,q)\n")
+    choice = choice.lower()
 
 if not(connection_established) :
   print("Could not establish connection with game server, quitting")
@@ -76,50 +79,78 @@ if not(connection_established) :
 print("Connection established with a snake_lan game server")
 
 ## Playing game
-os.system(clear_cmd)
-print(tcp_recv_with_length(server).decode()) # printing the initial board
 
-try :
-  echooff()
-  listener = keyboard.Listener(on_press = lambda k : send_keyboard_input(server, k), on_release = nothing)
-  listener.start() # Start listening for keyboard inputs
-  while True :
-    if debug :
-      print("\nwaiting for the signal for a move, or \"\game over\"...")
-    msg = server.recv(11) # waiting for signal to choose a direction or game over signal
-    if msg.decode() == "Game over.." :
+def process_restart_signal(data : bytes) -> None :
+  if int.from_bytes(data) == 1 :
+    print("Adversary wants a rematch !")
+  elif int.from_bytes(data) == 0 :
+    print("Adversary ended the game")
+    quit() # TODO this only stops the thread trying to receive info, find a way to stop main thread too : look in the case where we receive this message but are still waiting for inputs on our end.
+  else :
+    print("Unexpected rematch message received from server :", int.from_bytes())
+
+continue_game = True
+
+while continue_game :
+  os.system(clear_cmd)
+  print(tcp_recv_with_length(server).decode()) # printing the initial board
+
+  try :
+    echooff()
+    listener = keyboard.Listener(on_press = lambda k : send_keyboard_input(server, k), on_release = nothing)
+    listener.start() # Start listening for keyboard inputs
+    while True :
       if debug :
-        print("Game over received :", msg.decode())
-      break
+        print("\nwaiting for the signal for a move, or \"\game over\"...")
+      msg = server.recv(11) # waiting for signal to choose a direction or game over signal
+      if msg.decode() == "Game over.." :
+        if debug :
+          print("Game over received :", msg.decode())
+        break
 
-    if msg.decode() == "start moves" :
+      if msg.decode() == "start moves" :
+        if debug :
+          print("RECEIVED START MOVES")
+        direction_change_allowed = True
+      else :
+        print(f"Error : unexpected message \"{msg.decode()}\", expected \"start moves\"")
+        quit()
       if debug :
-        print("RECEIVED START MOVES")
-      direction_change_allowed = True
-    else :
-      print(f"Error : unexpected message \"{msg.decode()}\", expected \"start moves\"")
-      quit()
-    if debug :
-      print("WAITING FOR END_MOVES")
-    msg = server.recv(9)
-    if debug :
-      print(msg)
-    if msg.decode() != "end moves" :
-      print(f"Error : unexpected message \"{msg.decode()}\", expected \"end moves\"")
-      quit()
-    if debug :
-      print("RECEIVED END_MOVES")
-    direction_change_allowed = False
-    if debug :
-      print("\n WAITING FOR THE BOARD : \n")
-    os.system(clear_cmd)
-    print(tcp_recv_with_length(server).decode()) # printing the actualized board
-    if debug :
-      print("\n RECEIVED BOARD : \n")
-  listener.stop() # Stop listening for keyboard inputs
-finally :
-  echoon()
+        print("WAITING FOR END_MOVES")
+      msg = server.recv(9)
+      if debug :
+        print(msg)
+      if msg.decode() != "end moves" :
+        print(f"Error : unexpected message \"{msg.decode()}\", expected \"end moves\"")
+        quit()
+      if debug :
+        print("RECEIVED END_MOVES")
+      direction_change_allowed = False
+      if debug :
+        print("\n WAITING FOR THE BOARD : \n")
+      os.system(clear_cmd)
+      print(tcp_recv_with_length(server).decode()) # printing the actualized board
+      if debug :
+        print("\n RECEIVED BOARD : \n")
+    listener.stop() # Stop listening for keyboard inputs
+  finally :
+    echoon()
 
-## Game ended, waiting for losers list
-losers = tcp_recv_with_length(server)
-print("Players :", losers.decode(), "lost")
+  ## Game ended, waiting for losers list
+  losers = tcp_recv_with_length(server)
+  print("Players :", losers.decode(), "lost")
+  check_restart_signal = Thread(target = lambda : action_on_recv(server, 1, process_restart_signal))
+  check_restart_signal.start()
+  restart = None
+  while restart is None :
+    restart = bool_of_input(input("\rRematch ? (y/n)\n"), None)
+  if not(restart) :
+    server.send((0).to_bytes()) # signaling to the server we want to stop the game
+    print("Goodbye")
+    quit()
+  else :
+    server.send((1).to_bytes()) # signaling to the server we want a rematch
+    print("Waiting for the server's answer for a rematch...")
+    check_restart_signal.join()
+
+# TODO add possibility for client to restart a game with another server without quitting and re-running 

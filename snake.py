@@ -5,7 +5,7 @@ from socket import gethostbyname, gethostbyaddr, socket, MSG_DONTWAIT
 from pynput import keyboard
 from selector import selector, echoon, echooff
 import _thread
-from threading import *
+from threading import Thread, Lock
 import time, os, random
 
 ## Types
@@ -36,9 +36,9 @@ def update_local(game, key) :
     except AttributeError :
       pass
 
-def listening_moves(game : "Game", sclient : socket, lock : Lock) :
+def listening_moves(game : "Game", sclient : socket, lock : Lock) -> None :
   """ listen moves from [sclient] while [lock] is acquired and performs the updates in the second snake's direction in [game] """
-  while lock.locked() : # while the main thread acquired the lock, we listen for move command from the client
+  while lock.locked() : # while the main thread acquired the lock, we listen for move command from the client + FIXME find a way to remove active waiting
     try :
       msg = sclient.recv(1, MSG_DONTWAIT)
       distant_move = msg.decode()
@@ -209,7 +209,10 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
   def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1., emoji_mode : bool = True) :
     """ initiates a game.
       [width] [height] : dimension of the board
+      [initial_snake_length] : ...
       [initial_snakes] : a list of initial coordinates of the heads and directions of the snakes. We assume snakes don't overlap at the beginning and provides valid coordinates;
+      [timeout] : the time between two actualization of the board. 1 second by default.
+      [emoji_mode] : if [True], printing the game elements with emoji, otherwise, print using ascii and unicode characters
      """
     n_snakes = len(initial_snakes)
     assert (n_snakes < 5) # for now, only a maximum of 5 snakes is allowed (because of the colors)
@@ -229,10 +232,7 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
     # placing apples :
     self.grid[int(height/2)][int(width/2)] = (Cell.APPLE, None)
     # placing snakes :
-    id_cnt = 0
-    for snake_data in initial_snakes :
-      self.snakes.append(Snake(id_cnt, self.grid, snake_data[0][0], snake_data[0][1], initial_snake_length, snake_data[1]))
-      id_cnt += 1
+    self.snakes = [Snake(i, self.grid, snake_data[0][0], snake_data[0][1], initial_snake_length, snake_data[1]) for (i, snake_data) in enumerate(initial_snakes)]
   def __str__(self) :
     first_line = "┌"             # first and last line for a frame of the form : 
     last_line = "└"              # ┌──────────────────┐
@@ -272,12 +272,29 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
       res += (line + "│\n")
     res += last_line
     return res
+  def change_parameters(self, width : int | None = None, height : int | None = None, initial_snake_length : int | None = None, initial_snakes : list[tuple[tuple[int, int], Dir]] | None = None, timeout : float | None = None, emoji_mode : bool | None = None) :
+    """ Changes parameters of the game. See Game for details about the parameters. """
+    if width is not None :
+      self.width = width
+    if height is not None :
+      self.height = height
+    assert (initial_snakes is not None and initial_snake_length is not None) # FIXME find a way to restore previous inital positions
+    if initial_snakes is not None :
+      # resets board to initial positions, according to [initial_snakes]
+      self.grid = [[(Cell.EMPTY, None) for i in range(self.width)] for i in range(self.height)]
+      # placing apples :
+      self.grid[int(self.height/2)][int(self.width/2)] = (Cell.APPLE, None)
+      # placing snakes :
+      self.snakes = [Snake(i, self.grid, snake_data[0][0], snake_data[0][1], initial_snake_length, snake_data[1]) for i, snake_data in enumerate(initial_snakes)]
+    if timeout is not None :
+      self.timeout = timeout
+    if emoji_mode is not None :
+      self.emoji_mode = emoji_mode
   def update_directions(self) -> None :
     global direction_change_allowed
     direction_change_allowed = True
     time.sleep(self.timeout)
     direction_change_allowed = False
-
   def play_round(self) -> bool :
     """ plays a round, returns True if the game can be continued, False if it is finished """
     self.update_directions()
@@ -315,12 +332,14 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
     listener.stop()
 
 class OnlineGame(Game) :
+  connected_to_adversary : bool
   sclient : socket
   def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1.) :
     """ Initiates an online game. For now, allow only two players. See [Game] for more information. """
     n_snakes = len(initial_snakes)
     if n_snakes != 2 :
       raise ValueError("For now, an online game can only be between two players.")
+    self.connected_to_adversary = False
     super().__init__(width, height, initial_snake_length, initial_snakes, timeout)
   def update_directions(self) -> None :
     global direction_change_allowed
@@ -331,7 +350,7 @@ class OnlineGame(Game) :
       print("start moves was received by client")
     end_listening_lock = _thread.allocate_lock()
     listening_distant = Thread(target = listening_moves, args = (self, self.sclient, end_listening_lock))
-    end_listening_lock.acquire() # must not be blocking
+    end_listening_lock.acquire() # shouldn't not be blocking
     listening_distant.start()
     direction_change_allowed = True
     time.sleep(self.timeout)
@@ -365,83 +384,106 @@ class OnlineGame(Game) :
     for snake in self.snakes :
       snake.end_of_round()
     if losers != [] :
-      print(join(losers, ", ", " and "), "lost")
       self.losers = losers
     return losers == []
-  def start(self, display : bool = True, clear : bool = True) -> None :
-    os.system(clear_cmd)
-    # Waiting for an adversary
-    adversary_found : bool | None = False
-    server = socket()
-    print("Waiting for an adversary to connect...")
-    server.bind(('0.0.0.0', 9999))
-    server.listen()
-    while not(adversary_found) :
-      (sclient, adclient) = server.accept()
-      adversary_found = None
-      while adversary_found is None :
-        print(gethostbyaddr(adclient[0])[0], end = " ")
-        adversary_found = bool_of_input(input("wants to play, start a game with them ? (Y/n) "))
-      # Adversary found, trying to engage a game
-      try :
-        if debug :
-          print("sending game start ?")
-        sclient.send("game start ?".encode()) # nb of bytes : 12
-        if debug :
-          print("game start ? received by client, now waiting for game startOK confirmation")
-        donnees = sclient.recv(12)
-        if debug :
-          print(donnees.decode())
-          time.sleep(2)
-        if donnees.decode() == "game startOK" :
-          self.sclient = sclient
-        else :
-          print("Did not respond to the game invitiation")
+  def connect_to_adversary(self) -> None :
+    """ Connect to an adversary, must be called before calling [start]. Will loop until an adversary is found. """
+    if self.connected_to_adversary :
+      print("Close the first connection, by calling the [end] method, before starting another one.")
+    else :
+      # Waiting for an adversary
+      adversary_found : bool | None = False
+      server = socket()
+      print("Waiting for an adversary to connect...")
+      server.bind(('0.0.0.0', 9999))
+      server.listen()
+      while not(adversary_found) :
+        (sclient, adclient) = server.accept()
+        adversary_found = None
+        while adversary_found is None :
+          print(gethostbyaddr(adclient[0])[0], end = " ")
+          adversary_found = bool_of_input(input("wants to play, start a game with them ? (y/n) "), None)
+        # Adversary found, trying to engage a game
+        try :
+          if debug :
+            print("sending game start ?")
+          sclient.send("game start ?".encode()) # nb of bytes : 12
+          if debug :
+            print("game start ? received by client, now waiting for game startOK confirmation")
+          donnees = sclient.recv(12)
+          if debug :
+            print(donnees.decode())
+            time.sleep(2)
+          if donnees.decode() == "game startOK" :
+            self.sclient = sclient
+          else :
+            print("Did not respond to the game invitiation")
+            adversary_found = False
+        except ConnectionResetError :
+          print("This one is not worth it, they just left ! How rude !")
           adversary_found = False
-      except ConnectionResetError :
-        print("This one is not worth it, they just left ! How rude !")
-        adversary_found = False
-    print("Connection established, game starting", end = "")
-    for i in range(3) :
-      time.sleep(.3)
-      print(".", end = "", flush = True)
-    os.system(clear_cmd)
-    # Playing a game
-    print(self)
-    if debug :
-      print("sending self for the first time : ")
-    tcp_send_with_length(self.sclient, str(self).encode())
-    if debug :
-      print("(first ever) self received by client")
-    listener = keyboard.Listener(on_press = lambda k : update_local(self, k), on_release = nothing) # keyboard.Listener(on_press = update_local, on_release = nothing)
-    listener.start()
-    while self.play_round() :
-      if not(debug) :
-        os.system(clear_cmd)
-      if display :
-        if debug :
-          print("sending self : ")
-        print(self)
-        tcp_send_with_length(self.sclient, str(self).encode()) 
-        if debug :
-          print("self received by client")
-    listener.stop()
-    if debug :
-      print("sending self for the last time : ")
-    tcp_send_with_length(self.sclient, str(self).encode()) 
-    if debug :
-      print("self received by client (for the last time)")
-    if debug :
-      print("Sending Game over...")
-    self.sclient.send("Game over..".encode()) # nb of bytes : 11 /!\ must be the same number of bytes as moves start (11)
-    if debug :
-      print("client received Game over, now sending losers...")
-    tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode()) # TODO replace this by a while loop, ending by a character indicating the end of losers
-    if debug :
-      print("client received losers")
-  def end(self) -> None :
-    """ Ends the game : close connection with distant adversary """
-    self.sclient.close()
-  def send_to_adversary(self, data : bytes) :
-   """ Assumes [self.sclient] is an open socket, sends [msg] to the current adversary. """
-   self.sclient.send(data)
+      print("Connection established", end = "")
+      self.connected_to_adversary = True
+      for i in range(3) :
+        time.sleep(.3)
+        print(".", end = "", flush = True)
+  def start(self, display : bool = True, clear : bool = True) -> None :
+    """ Starts an online game with the adversary connected via [self.sclient] """
+    if self.connected_to_adversary :
+      os.system(clear_cmd)
+      print(self)
+      if debug :
+        print("sending self for the first time : ")
+      tcp_send_with_length(self.sclient, str(self).encode())
+      if debug :
+        print("(first ever) self received by client")
+      listener = keyboard.Listener(on_press = lambda k : update_local(self, k), on_release = nothing)
+      listener.start()
+      while self.play_round() :
+        if not(debug) :
+          os.system(clear_cmd)
+        if display :
+          if debug :
+            print("sending self : ")
+          print(self)
+          tcp_send_with_length(self.sclient, str(self).encode()) 
+          if debug :
+            print("self received by client")
+      listener.stop()
+      os.system(clear_cmd)
+      print(self)
+      print(join(self.losers, ", ", " and "), "lost")
+      if debug :
+        print("sending self for the last time : ")
+      tcp_send_with_length(self.sclient, str(self).encode()) 
+      if debug :
+        print("self received by client (for the last time)")
+      if debug :
+        print("Sending Game over...")
+      self.sclient.send("Game over..".encode()) # nb of bytes : 11 /!\ must be the same number of bytes as moves start (11)
+      if debug :
+        print("client received Game over, now sending losers...")
+      tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode()) # TODO replace this by a while loop, ending by a character indicating the end of losers
+      if debug :
+        print("client received losers")
+    else :
+      print("You must be connected to an adverary to start a game")
+  def end(self) -> bool :
+    """ Ends the game : close connection with distant adversary. Returns [True] if we were able to close the socket, [False] if it was not connected. """
+    if self.connected_to_adversary :
+      self.sclient.close()
+      return True
+    else :
+      return False
+  def send_to_adversary(self, data : bytes) -> None :
+    """ Sends [data] to the current adversary. Raise a [ValueError] if we were not connected to an adversary beforehand. """
+    if self.connected_to_adversary :
+      self.sclient.send(data)
+    else :
+      raise ValueError("You must connect to an adversary before sending them data")
+  def recv_from_adversary(self, n : int, flags : int = 0) -> bytes :
+    """ Receives [n] bytes from the current adversary. Raise a [ValueError] if we were not connected to an adversary beforehand. """
+    if self.connected_to_adversary :
+      return self.sclient.recv(n, flags) # TODO check if flags = 0 is te correct default value for [recv]
+    else :
+      raise ValueError("You must connect to an adversary before receiving data from them")
