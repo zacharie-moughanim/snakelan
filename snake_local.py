@@ -1,8 +1,11 @@
 from snake import *
+from utils import os_generic_clear
 
 continue_game = True
+clear_cmd = os_generic_clear()
 
 while continue_game :
+  os.system(clear_cmd)
   print("Size of the board ?")
   size = [11, 21, 31][selector([0, 1, 2], lambda i : [" ⸳ ", " ▪ ", " ■ "][i])]
   print("\nSpeed of the game ?")
@@ -16,5 +19,5 @@ while continue_game :
     echoon()
   in_cont = None
   while in_cont is None :
-    in_cont = bool_of_input(input("\rContinue ? (Y/n)\n"))
-  continue_game = in_cont
+    in_cont = bool_of_input(input("\rContinue ? (y/n) "), None)
+  continue_game = in_cont # todo replace the creation of a new game upon restart by a change of parameters
