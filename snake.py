@@ -333,6 +333,7 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
 
 class OnlineGame(Game) :
   connected_to_adversary : bool
+  server : socket
   sclient : socket
   def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1.) :
     """ Initiates an online game. For now, allow only two players. See [Game] for more information. """
@@ -393,12 +394,12 @@ class OnlineGame(Game) :
     else :
       # Waiting for an adversary
       adversary_found : bool | None = False
-      server = socket()
+      self.server = socket()
       print("Waiting for an adversary to connect...")
-      server.bind(('0.0.0.0', 9999))
-      server.listen()
+      self.server.bind(('0.0.0.0', 9999))
+      self.server.listen()
       while not(adversary_found) :
-        (sclient, adclient) = server.accept()
+        (sclient, adclient) = self.server.accept()
         adversary_found = None
         while adversary_found is None :
           print(gethostbyaddr(adclient[0])[0], end = " ")
@@ -472,6 +473,8 @@ class OnlineGame(Game) :
     """ Ends the game : close connection with distant adversary. Returns [True] if we were able to close the socket, [False] if it was not connected. """
     if self.connected_to_adversary :
       self.sclient.close()
+      self.server.close()
+      self.connected_to_adversary = False
       return True
     else :
       return False

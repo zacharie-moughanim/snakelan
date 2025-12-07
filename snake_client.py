@@ -139,18 +139,24 @@ while continue_game :
   ## Game ended, waiting for losers list
   losers = tcp_recv_with_length(server)
   print("Players :", losers.decode(), "lost")
-  check_restart_signal = Thread(target = lambda : action_on_recv(server, 1, process_restart_signal))
-  check_restart_signal.start()
+  # check_restart_signal = Thread(target = lambda : action_on_recv(server, 1, process_restart_signal))
+  # check_restart_signal.start()
   restart = None
   while restart is None :
     restart = bool_of_input(input("\rRematch ? (y/n)\n"), None)
   if not(restart) :
     server.send((0).to_bytes()) # signaling to the server we want to stop the game
     print("Goodbye")
-    quit()
+    continue_game = False
   else :
     server.send((1).to_bytes()) # signaling to the server we want a rematch
     print("Waiting for the server's answer for a rematch...")
-    check_restart_signal.join()
+    adversary_wants_rematch = int.from_bytes(server.recv(1))
+    assert(adversary_wants_rematch == 0 or adversary_wants_rematch == 1)
+    if adversary_wants_rematch == 0 :
+      print("Adversary declined rematch, quitting")
+      continue_game = False
+    else :
+      continue_game = True
 
 # TODO add possibility for client to restart a game with another server without quitting and re-running 
