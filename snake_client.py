@@ -42,17 +42,12 @@ def action_on_recv(sckt : socket, n : int, on_recv) -> bytes :
 
 ## Establishing connection with a game server
 
-ip_scan_range : Tuple[range, range, range, range] = ([192], [168], range(255), range(255))
+ip_scan_start : Tuple[int, int, int, int] = (192, 168, 0, 1)
+ip_scan_end : Tuple[int, int, int, int] = (192, 168, 255, 255)
 if len(sys.argv) > 2 :
-  ip_scan_start : List[int] = [int(x) for x in sys.argv[1].split('.')]
-  ip_scan_end : List[int] = [int(x) for x in sys.argv[2].split('.')]
+  ip_scan_start = tuple([int(x) for x in sys.argv[1].split('.')])
+  ip_scan_end = tuple([int(x) for x in sys.argv[2].split('.')])
   print("from", ip_scan_start, "until", ip_scan_end)
-  ip_scan_range = (
-    range(ip_scan_start[0], ip_scan_end[0] + 1),
-    range(ip_scan_start[1], ip_scan_end[1] + 1),
-    range(ip_scan_start[2], ip_scan_end[2] + 1),
-    range(ip_scan_start[3], ip_scan_end[3] + 1)
-  )
   time.sleep(2)
 
 connection_established : bool = False
@@ -67,7 +62,7 @@ while not(connection_established) and choice != "q" :
     os.system(clear_cmd)
     if choice == "s" :
       print("Scanning local network for devices...")
-      local_devs = get_local_devices(ip_scan_range)
+      local_devs = get_local_devices(tuple(ip_scan_start), tuple(ip_scan_end))
     print("Who to play with ?")
     addr = local_devs[selector(local_devs, lambda dev : str(dev[0]))][2][0]
     server.connect((addr, 9999))

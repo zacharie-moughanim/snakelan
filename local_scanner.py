@@ -32,24 +32,40 @@ def str_net_dev(dev : device) :
   return join(res)
   return f"Name : {dev[0]}, alias(es) : {join(dev[1])}, address : {join(dev[2])}"
 
+def next_address(addr : tuple[int, int, int, int]) -> tuple[int, int, int, int] :
+  """ returns the next address of [addr] """
+  assert(0 <= addr[0] <= 255)
+  assert(0 <= addr[1] <= 255)
+  assert(0 <= addr[2] <= 255)
+  assert(0 <= addr[3] <= 255)
+  if addr[3] < 255 :
+    return (addr[0], addr[1], addr[2], addr[3] + 1)
+  elif addr[2] < 255 :
+    return (addr[0], addr[1], addr[2] + 1, 0)
+  elif addr[1] < 255 :
+    return (addr[0], addr[1] + 1, 0, 0)
+  elif addr[0] < 255 :
+    return (addr[0] + 1, 0, 0, 0)
+  else :
+    raise ValueError("Trying to increment maximum IPv4 address")
+
 ## Main
 
-def get_local_devices(ranges : Tuple[range, range, range, range] = ([192], [168], range(255), range(255))) -> list[device] :
-  """ Scans local IPv4 addresses within [ranges]. press Ctrl+C while searching to interrupt the search. Default search : 192.168.*.*. """
+def get_local_devices(lower_address : tuple[int, int, int, int] = (192, 168, 0, 1), upper_address : tuple[int, int, int, int] = (192, 168, 255, 255)) -> list[device] :
+  """ Scans local IPv4 addresses within [lower_address] (included) and [upper_address] (excluded). Press Ctrl+C while searching to interrupt the search. Default search : 192.168.*.*. """
   local_devs : list[device] = []
   try :
     echooff()
-    for i in ranges[0] :
-      for j in ranges[1] :
-        for k in ranges[2] :
-          print(f"\r{i}.{j}.{k}.*         ", sep = "", end = "")
-          for l in ranges[3] :
-            try :
-              dev : device = socket.gethostbyaddr(f"{i}.{j}.{k}.{l}")
-              print("\n", len(local_devs), " | ", str_net_dev(dev), sep = "")
-              local_devs.append(dev)
-            except socket.herror :
-              pass
+    addr = lower_address
+    while addr != upper_address :
+      try :
+        print(f"\r{addr[0]}.{addr[1]}.{addr[2]}.{addr[3]}         ", sep = "", end = "")
+        dev : device = socket.gethostbyaddr(f"{addr[0]}.{addr[1]}.{addr[2]}.{addr[3]}")
+        print("\n", len(local_devs), " | ", str_net_dev(dev), sep = "")
+        local_devs.append(dev)
+      except socket.herror :
+        pass
+      addr = next_address(addr)
   except KeyboardInterrupt :
     echoon()
     pass
