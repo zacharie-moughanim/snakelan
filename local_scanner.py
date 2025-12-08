@@ -42,9 +42,9 @@ def get_local_devices(ranges : Tuple[range, range, range, range] = ([192], [168]
     for i in ranges[0] :
       for j in ranges[1] :
         for k in ranges[2] :
+          print(f"\r{i}.{j}.{k}.*         ", sep = "", end = "")
           for l in ranges[3] :
             try :
-              print(f"\r{i}.{j}.{k}.{l}         ", sep = "", end = "")
               dev : device = socket.gethostbyaddr(f"{i}.{j}.{k}.{l}")
               print("\n", len(local_devs), " | ", str_net_dev(dev), sep = "")
               local_devs.append(dev)
