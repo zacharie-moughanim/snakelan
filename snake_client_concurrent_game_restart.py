@@ -101,7 +101,7 @@ while continue_game :
     listener.start() # Start listening for keyboard inputs
     while True :
       if debug :
-        print("\nwaiting for the signal for a move, or \"\game over\"...")
+        print("\nwaiting for the signal for a move, or \"game over\"...")
       msg = server.recv(11) # waiting for signal to choose a direction or game over signal
       if msg.decode() == "Game over.." :
         if debug :
