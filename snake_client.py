@@ -47,8 +47,10 @@ ip_scan_end : Tuple[int, int, int, int] = (192, 168, 255, 255)
 if len(sys.argv) > 2 :
   ip_scan_start = tuple([int(x) for x in sys.argv[1].split('.')])
   ip_scan_end = tuple([int(x) for x in sys.argv[2].split('.')])
-  print("from", ip_scan_start, "until", ip_scan_end)
-  time.sleep(2)
+  # print("from", ip_scan_start, "until", ip_scan_end)
+  # time.sleep(2)
+else :
+  print("To specify which address range to scan : python snake_client.py <min_address> <max_address>")
 
 connection_established : bool = False
 choice : str = "s"
