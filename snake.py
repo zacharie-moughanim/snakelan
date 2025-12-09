@@ -333,6 +333,7 @@ class Game : # FIXME still buggy, it appears we can just go back (pressing q whe
 
 class OnlineGame(Game) :
   connected_to_adversary : bool
+  server_up : bool
   server : socket
   sclient : socket
   def __init__(self, width : int, height : int, initial_snake_length : int, initial_snakes : list[tuple[tuple[int, int], Dir]], timeout : float = 1.) :
@@ -341,6 +342,7 @@ class OnlineGame(Game) :
     if n_snakes != 2 :
       raise ValueError("For now, an online game can only be between two players.")
     self.connected_to_adversary = False
+    self.server_up = False
     super().__init__(width, height, initial_snake_length, initial_snakes, timeout)
   def update_directions(self) -> None :
     global direction_change_allowed
@@ -394,43 +396,47 @@ class OnlineGame(Game) :
     else :
       # Waiting for an adversary
       adversary_found : bool | None = False
-      self.server = socket()
-      print("Waiting for an adversary to connect...")
-      self.server.bind(('0.0.0.0', 9999))
-      self.server.listen()
-      while not(adversary_found) :
+      if not(self.server_up) :
+        self.server = socket()
+        self.server.bind(('0.0.0.0', 9999))
+        self.server.listen()
+      while not(self.connected_to_adversary) :
+        print("Waiting for an adversary to connect...")
+        adversary_selected = None
         (sclient, adclient) = self.server.accept()
-        adversary_found = None
-        while adversary_found is None :
+        while adversary_selected is None : # until user decided whether to engage
           print(gethostbyaddr(adclient[0])[0], end = " ")
-          adversary_found = bool_of_input(input("wants to play, start a game with them ? (y/n) "), None)
-        # Adversary found, trying to engage a game
-        try :
-          if debug :
-            print("sending game start ?")
-          sclient.send("game start ?".encode()) # nb of bytes : 12
-          if debug :
-            print("game start ? received by client, now waiting for game startOK confirmation")
-          donnees = sclient.recv(12)
-          if debug :
-            print(donnees.decode())
-            time.sleep(2)
-          if donnees.decode() == "game startOK" :
-            self.sclient = sclient
-          else :
-            print("Did not respond to the game invitiation")
-            adversary_found = False
-        except ConnectionResetError :
-          print("This one is not worth it, they just left ! How rude !")
-          adversary_found = False
-      print("Connection established", end = "")
-      self.connected_to_adversary = True
-      for i in range(3) :
-        time.sleep(.3)
-        print(".", end = "", flush = True)
+          adversary_selected = bool_of_input(input("wants to play, start a game with them ? (y/n) "), None)
+        if adversary_selected :
+          # Adversary selected by user, trying to engage a game
+          try :
+            if debug :
+              print("sending game start ?")
+            sclient.send("game start ?".encode()) # nb of bytes : 12
+            if debug :
+              print("game start ? received by client, now waiting for game startOK confirmation")
+            donnees = sclient.recv(12)
+            if debug :
+              print(donnees.decode())
+              time.sleep(2)
+            if donnees.decode() == "game startOK" :
+              self.sclient = sclient
+            else :
+              print("Did not respond to the game invitiation")
+              adversary_selected = False
+          except ConnectionResetError :
+            print("This one is not worth it, they just left ! How rude !")
+            adversary_selected = False
+          print("Connection established", end = "")
+          self.connected_to_adversary = True
+          for i in range(3) :
+            print(".", end = "", flush = True)
+            time.sleep(.3)
   def start(self, display : bool = True, clear : bool = True) -> None :
     """ Starts an online game with the adversary connected via [self.sclient] """
-    if self.connected_to_adversary :
+    if not(self.connected_to_adversary) :
+      print("You must be connected to an adverary to start a game")
+    else :
       os.system(clear_cmd)
       print(self)
       if debug :
@@ -467,14 +473,19 @@ class OnlineGame(Game) :
       tcp_send_with_length(self.sclient, join(self.losers, sep = ";").encode()) # TODO replace this by a while loop, ending by a character indicating the end of losers
       if debug :
         print("client received losers")
-    else :
-      print("You must be connected to an adverary to start a game")
   def end(self) -> bool :
-    """ Ends the game : close connection with distant adversary. Returns [True] if we were able to close the socket, [False] if it was not connected. """
+    """ Ends a game : close connection with distant adversary, but keep server up. Returns [True] if we were able to close the socket, [False] if it was not connected. """
     if self.connected_to_adversary :
       self.sclient.close()
-      self.server.close()
       self.connected_to_adversary = False
+      return True
+    else :
+      return False
+  def close_server(self) -> bool :
+    """ Disconnect the server. Returns [True] if we were able to close the socket, [False] if it was not connected. """
+    if self.server_up :
+      self.server.close()
+      self.server_up = False
       return True
     else :
       return False
