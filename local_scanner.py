@@ -59,9 +59,9 @@ def get_local_devices(lower_address : tuple[int, int, int, int] = (192, 168, 0, 
     addr = lower_address
     while addr != upper_address :
       try :
-        print(f"\r{addr[0]}.{addr[1]}.{addr[2]}.{addr[3]}         ", sep = "", end = "")
+        print(f"{addr[0]}.{addr[1]}.{addr[2]}.{addr[3]}         ", sep = "", end = "\r")
         dev : device = socket.gethostbyaddr(f"{addr[0]}.{addr[1]}.{addr[2]}.{addr[3]}")
-        print("\n", len(local_devs), " | ", str_net_dev(dev), sep = "")
+        print("\r", len(local_devs), " | ", str_net_dev(dev), sep = "")
         local_devs.append(dev)
       except socket.herror :
         pass
@@ -73,3 +73,4 @@ def get_local_devices(lower_address : tuple[int, int, int, int] = (192, 168, 0, 
     echoon()
   return local_devs
   
+# get_local_devices((10, 0, 0, 0), (10, 255, 255, 255))

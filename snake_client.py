@@ -45,8 +45,8 @@ def action_on_recv(sckt : socket, n : int, on_recv) -> bytes :
 ip_scan_start : Tuple[int, int, int, int] = (192, 168, 0, 1)
 ip_scan_end : Tuple[int, int, int, int] = (192, 168, 255, 255)
 if len(sys.argv) > 2 :
-  ip_scan_start = tuple([int(x) for x in sys.argv[1].split('.')])
-  ip_scan_end = tuple([int(x) for x in sys.argv[2].split('.')])
+  ip_scan_start = tuple([int(x) for x in sys.argv[1].split('.')]) # TODO improve selection of address to scan, add a window at the beginning of the game
+  ip_scan_end = tuple([int(x) for x in sys.argv[2].split('.')]) # TODO also allow to enter the name of the device rather than the IPv4 address
   # print("from", ip_scan_start, "until", ip_scan_end)
   # time.sleep(2)
 else :
